@@ -1,0 +1,9 @@
+# Versions observed in the supplied Windows v0.14 virtual environment.
+# Railway builds fresh Linux-compatible wheels; Windows .venv must not be deployed.
+fastapi==0.143.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+pydantic==2.14.0
+shapely==2.2.0
+ezdxf==1.4.4
+numpy==2.5.3
