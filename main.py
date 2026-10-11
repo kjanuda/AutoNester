@@ -19,6 +19,7 @@ from cad_metadata import inspect_cad_metadata, build_metadata_preview_bundle
 from cad_aware_export import build_cad_aware_nested_preview
 from phase13_nfp import optimize_nfp_hybrid
 from tuka_compatibility import inspect_tuka_exchange
+from material_aware import inspect_materials, build_material_previews
 
 # Keep the public preview stateless; never store user uploads permanently.
 PRODUCTION = os.getenv('APP_ENV', 'development').lower() == 'production'
@@ -28,7 +29,7 @@ allowed_origins = [origin.strip().rstrip('/') for origin in
 if PRODUCTION and (not os.getenv('ALLOWED_ORIGINS') or '*' in allowed_origins):
     raise RuntimeError('Set ALLOWED_ORIGINS to the exact Vercel origin for production')
 
-app = FastAPI(title='AutoNester API', version='0.14.0',
+app = FastAPI(title='AutoNester API', version='0.15.0',
               description='Garment nesting research prototype. NOT FOR CUTTING.',
               docs_url=None if PRODUCTION else '/docs',
               redoc_url=None if PRODUCTION else '/redoc',
@@ -106,12 +107,12 @@ class NestingRequest(BaseModel):
 
 @app.get('/')
 def home():
-    return {'project': 'AutoNester', 'status': 'running', 'version': '0.14.0',
+    return {'project': 'AutoNester', 'status': 'running', 'version': '0.15.0',
             'production_ready': False}
 
 @app.get('/health')
 def health():
-    return {'status': 'ok', 'version': '0.14.0', 'production_ready': False}
+    return {'status': 'ok', 'version': '0.15.0', 'production_ready': False}
 
 @app.post('/api/nesting/generate')
 def create_nesting(request: NestingRequest):
@@ -343,6 +344,52 @@ async def export_cad_aware_nested_preview(
             'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
         })
     except (ValueError, TypeError, json.JSONDecodeError, DxfImportError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        await file.close()
+
+
+@app.post('/api/cad/material-review')
+async def cad_material_review(file: UploadFile = File(...), unitless_units: str = Form('mm'),
+                              source_units_override: str = Form('auto'),
+                              reference_pattern_index: int | None = Form(None),
+                              reference_axis: str = Form('width'),
+                              reference_mm: float | None = Form(None),
+                              tolerance_mm: float = Form(1.0)):
+    try:
+        raw = await file.read(MAX_FILE_BYTES + 1)
+        return inspect_materials(raw, file.filename or 'source.dxf', unitless_units,
+                                 source_units_override, reference_pattern_index,
+                                 reference_axis, reference_mm, tolerance_mm)
+    except (DxfImportError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        await file.close()
+
+
+@app.post('/api/nesting/material-preview')
+async def nesting_material_preview(
+    file: UploadFile = File(...), unitless_units: str = Form('mm'),
+    source_units_override: str = Form('auto'),
+    selected_patterns_json: str = Form(...), assignments_json: str = Form(...),
+    fabric_width: float = Form(...), gap: float = Form(2.0),
+    group_widths_json: str = Form('{}'),
+    reference_pattern_index: int | None = Form(None),
+    reference_axis: str = Form('width'),
+    reference_mm: float | None = Form(None), tolerance_mm: float = Form(1.0),
+):
+    try:
+        if any(len(s) > limit for s, limit in ((selected_patterns_json, 30000),
+                                                (assignments_json, 10000),
+                                                (group_widths_json, 10000))):
+            raise ValueError('Material preview request exceeds input limit')
+        raw = await file.read(MAX_FILE_BYTES + 1)
+        return build_material_previews(
+            raw, file.filename or 'source.dxf', unitless_units, source_units_override,
+            json.loads(selected_patterns_json), json.loads(assignments_json),
+            fabric_width, gap, json.loads(group_widths_json),
+            reference_pattern_index, reference_axis, reference_mm, tolerance_mm)
+    except (DxfImportError, ValueError, TypeError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
         await file.close()
